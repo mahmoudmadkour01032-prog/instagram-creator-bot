@@ -68,8 +68,9 @@ class InstagramBot:
 /stop - Stop current automation process
 /status - Check current bot status
 /help - Show this help message
-/add_gmail <email>,<app_password> - Add Gmail account (Admin only)
-/add_accounts_from_file - Load Gmail accounts from attached file (Admin only)
+/add_gmail <email>,<app_password> - Add Gmail account
+/add_accounts_from_file - Load Gmail accounts from attached file
+/accounts - Export all created accounts as file
 
 **Ready to begin account creation automation!**
         """
@@ -89,9 +90,10 @@ class InstagramBot:
 • `/stop` - Stop current automation process
 • `/status` - Check current bot status
 
-**Account Management (Admin only):**
+**Account Management:**
 • `/add_gmail <email>,<app_password>` - Add a Gmail account
 • `/add_accounts_from_file` - Reply with a .txt file (email,password per line)
+• `/accounts` - Export all created accounts
 
 **Examples:**
 • `/start_auto 0` - Start from first account
@@ -103,11 +105,8 @@ class InstagramBot:
         await update.message.reply_text(help_message)
 
     async def add_gmail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /add_gmail command - Admin only"""
+        """Handle /add_gmail command"""
         chat_id = update.effective_chat.id
-        if ADMIN_IDS and chat_id not in ADMIN_IDS:
-            await update.message.reply_text("🔒 This command is for admins only.")
-            return
 
         if not context.args or len(context.args) < 1:
             await update.message.reply_text(
