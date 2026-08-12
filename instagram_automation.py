@@ -17,6 +17,7 @@ from selenium.webdriver.chrome.service import Service
 import pyotp
 from config import *
 from database import DatabaseUtils
+from chrome_init import get_chrome_binary
 
 # Configure logging
 logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,36 +25,26 @@ logger = logging.getLogger(__name__)
 
 
 def init_driver():
-    """Initialize Chrome WebDriver for Heroku/Server environments"""
+    """Initialize Chrome/Chromium WebDriver"""
     try:
         options = Options()
 
-        # Headless mode - required for Heroku
+        # Headless mode
         if HEADLESS_MODE:
             options.add_argument('--headless=new')
 
-        # Required arguments for server/CI environments
+        # Required arguments for server environments
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--disable-software-rasterizer')
-        options.add_argument('--remote-debugging-port=9222')
-
-        # Stability arguments
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-infobars')
         options.add_argument('--window-size=1920,1080')
-
-        # Set user agent to avoid detection
         options.add_argument(
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-
-        # Binary location for Heroku
-        chrome_bin = os.getenv('GOOGLE_CHROME_BIN', '')
-        if chrome_bin:
-            options.binary_location = chrome_bin
 
         # Additional prefs
         prefs = {
@@ -63,14 +54,15 @@ def init_driver():
         }
         options.add_experimental_option('prefs', prefs)
 
-        # Find chromium binary and chromedriver
-        import shutil
-        chromium_bin = shutil.which('chromium') or shutil.which('chromium-browser') or shutil.which('google-chrome') or os.getenv('CHROME_BIN', '')
-        if chromium_bin:
-            options.binary_location = chromium_bin
+        # Find browser binary
+        chrome_bin = get_chrome_binary()
+        if chrome_bin:
+            options.binary_location = chrome_bin
+            logger.info(f"Using browser: {chrome_bin}")
+        else:
+            logger.warning("No Chrome/Chromium binary found! Selenium will try default.")
 
-        service = Service()
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(options=options)
         driver.implicitly_wait(10)
         driver.set_page_load_timeout(30)
 
