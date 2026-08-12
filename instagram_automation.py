@@ -13,7 +13,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-import chromedriver_autoinstaller
+from selenium.webdriver.chrome.service import Service
 import pyotp
 from config import *
 from database import DatabaseUtils
@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 def init_driver():
     """Initialize Chrome WebDriver for Heroku/Server environments"""
     try:
-        # Auto-install matching chromedriver
-        chromedriver_autoinstaller.install()
-
         options = Options()
 
         # Headless mode - required for Heroku
@@ -66,7 +63,14 @@ def init_driver():
         }
         options.add_experimental_option('prefs', prefs)
 
-        driver = webdriver.Chrome(options=options)
+        # Find chromium binary and chromedriver
+        import shutil
+        chromium_bin = shutil.which('chromium') or shutil.which('chromium-browser') or shutil.which('google-chrome') or os.getenv('CHROME_BIN', '')
+        if chromium_bin:
+            options.binary_location = chromium_bin
+
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=options)
         driver.implicitly_wait(10)
         driver.set_page_load_timeout(30)
 
