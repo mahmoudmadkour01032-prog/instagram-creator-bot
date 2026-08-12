@@ -19,12 +19,12 @@ STATIC_PASSWORD = os.getenv('STATIC_PASSWORD', 'SecurePassword123!')
 # Web Dashboard Configuration
 WEB_DASHBOARD_URL = os.getenv('WEB_DASHBOARD_URL', 'https://your-netlify-app.netlify.app')
 
-# Heroku Port
+# Port (Railway/Heroku auto-set)
 PORT = int(os.getenv('PORT', 5000))
 
 # Logging Configuration
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-LOG_FILE = os.getenv('LOG_FILE', '/app/logs/bot.log')
+LOG_FILE = os.getenv('LOG_FILE', 'bot.log')
 
 # Database Connection Settings
 DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', '5'))

@@ -1,0 +1,12 @@
+[buildpack]
+builder = "heroku/buildpacks:20"
+
+[[buildpacks]]
+  uri = "heroku/google-chrome"
+
+[[buildpacks]]
+  uri = "heroku/python"
+
+[[processes]]
+  type = "web"
+  command = "python main_bot.py"

@@ -615,7 +615,7 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN environment variable is not set!")
         print("ERROR: Please set the BOT_TOKEN environment variable.")
-        print("Example: heroku config:set BOT_TOKEN=your_bot_token")
+        print("Example: railway variables set BOT_TOKEN=your_bot_token")
         import sys
         sys.exit(1)
 
