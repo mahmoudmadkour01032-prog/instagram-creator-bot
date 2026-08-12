@@ -1,7 +1,7 @@
 import os
 
 # Telegram Bot Configuration
-BOT_TOKEN = '8909302537:AAGlWkv7ug-7kXVBoGVkvYYw00p8QIlHx1w'
+BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 
 # Database Configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/instagram_bot')
@@ -19,6 +19,9 @@ STATIC_PASSWORD = os.getenv('STATIC_PASSWORD', 'SecurePassword123!')
 # Web Dashboard Configuration
 WEB_DASHBOARD_URL = os.getenv('WEB_DASHBOARD_URL', 'https://your-netlify-app.netlify.app')
 
+# Heroku Port
+PORT = int(os.getenv('PORT', 5000))
+
 # Logging Configuration
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 LOG_FILE = os.getenv('LOG_FILE', '/app/logs/bot.log')
@@ -27,3 +30,6 @@ LOG_FILE = os.getenv('LOG_FILE', '/app/logs/bot.log')
 DB_POOL_SIZE = int(os.getenv('DB_POOL_SIZE', '5'))
 DB_MAX_OVERFLOW = int(os.getenv('DB_MAX_OVERFLOW', '10'))
 DB_POOL_TIMEOUT = int(os.getenv('DB_POOL_TIMEOUT', '30'))
+
+# Admin Configuration
+ADMIN_IDS = os.getenv('ADMIN_IDS', '').split(',') if os.getenv('ADMIN_IDS') else []
