@@ -31,4 +31,5 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 LOG_FILE = os.getenv('LOG_FILE', 'bot.log')
 
 # Admin Configuration
-ADMIN_IDS = os.getenv('ADMIN_IDS', '').split(',') if os.getenv('ADMIN_IDS') else []
+_raw_admins = os.getenv('ADMIN_IDS', '').split(',') if os.getenv('ADMIN_IDS') else []
+ADMIN_IDS = [int(x.strip()) for x in _raw_admins if x.strip().isdigit()]
