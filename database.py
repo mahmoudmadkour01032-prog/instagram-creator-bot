@@ -1,11 +1,10 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
 from datetime import datetime
 import logging
 import os
-from config import DATABASE_URL, DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT
+from config import DATABASE_URL
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -65,18 +64,26 @@ class DatabaseManager:
     
     def setup_database(self):
         try:
-            self.engine = create_engine(
-                DATABASE_URL,
-                poolclass=QueuePool,
-                pool_size=DB_POOL_SIZE,
-                max_overflow=DB_MAX_OVERFLOW,
-                pool_timeout=DB_POOL_TIMEOUT,
-                pool_recycle=3600,
-                echo=False
-            )
+            # SQLite needs check_same_thread=False for multi-threading
+            if DATABASE_URL.startswith('sqlite'):
+                self.engine = create_engine(
+                    DATABASE_URL,
+                    connect_args={'check_same_thread': False},
+                    echo=False
+                )
+            else:
+                from sqlalchemy.pool import QueuePool
+                self.engine = create_engine(
+                    DATABASE_URL,
+                    poolclass=QueuePool,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_recycle=3600,
+                    echo=False
+                )
             self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
             Base.metadata.create_all(bind=self.engine)
-            logger.info("Database connection established successfully")
+            logger.info(f"Database connected: {DATABASE_URL}")
         except Exception as e:
             logger.error(f"Error setting up database: {e}")
             raise
@@ -87,7 +94,8 @@ class DatabaseManager:
     def test_connection(self):
         try:
             session = self.get_session()
-            session.execute("SELECT 1")
+            from sqlalchemy import text
+            session.execute(text("SELECT 1"))
             session.close()
             return True
         except Exception as e:

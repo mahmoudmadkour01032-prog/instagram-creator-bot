@@ -1,13 +1,11 @@
 python-telegram-bot==20.7
 selenium==4.15.0
-webdriver-manager==4.0.1
 gspread==5.11.0
 google-auth-oauthlib==1.1.0
 pyotp==2.9.0
 requests==2.31.0
 python-dotenv==1.0.0
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.9
 flask==3.0.0
 flask-cors==4.0.0
 flask-limiter==3.5.0
