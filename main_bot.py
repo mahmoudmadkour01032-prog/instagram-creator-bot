@@ -424,6 +424,52 @@ class InstagramBot:
             minutes = eta_minutes % 60
             return f"{hours}h {minutes}m"
 
+    async def accounts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /accounts command - send accounts file"""
+        chat_id = update.effective_chat.id
+        try:
+            accounts = DatabaseUtils.get_instagram_accounts(status='successful')
+            if not accounts:
+                await update.message.reply_text("📭 No successful accounts found yet.")
+                return
+
+            # Build text file content
+            lines = []
+            lines.append(f"=== Instagram Accounts ({len(accounts)} accounts) ===")
+            lines.append(f"=== Exported: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} ===")
+            lines.append("")
+            lines.append(f"{'#':<4} {'Username':<20} {'Email':<35} {'Password':<25} {'2FA Key':<30} {'Date'}")
+            lines.append("-" * 140)
+            for i, acc in enumerate(accounts, 1):
+                username = acc.username or 'N/A'
+                email = acc.email or 'N/A'
+                password = acc.password or 'N/A'
+                secret = acc.secret_key or 'N/A'
+                date = acc.created_at.strftime('%Y-%m-%d %H:%M') if acc.created_at else 'N/A'
+                lines.append(f"{i:<4} {username:<20} {email:<35} {password:<25} {secret:<30} {date}")
+
+            content = '\n'.join(lines)
+
+            # Save to file
+            filename = f'accounts_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.txt'
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            # Send file to user
+            with open(filename, 'rb') as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=filename,
+                    caption=f"📁 **{len(accounts)} Instagram accounts**\n✅ Successful only\n📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+                )
+
+            # Clean up
+            os.remove(filename)
+
+        except Exception as e:
+            logger.error(f"Error exporting accounts: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
     def setup_handlers(self):
         """Setup command handlers"""
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -432,6 +478,7 @@ class InstagramBot:
         self.application.add_handler(CommandHandler("stop", self.stop_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("add_gmail", self.add_gmail_command))
+        self.application.add_handler(CommandHandler("accounts", self.accounts_command))
 
     def run(self):
         """Run the bot"""
