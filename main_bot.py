@@ -7,7 +7,6 @@ from datetime import datetime
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
-import json
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -15,6 +14,7 @@ from flask_limiter.util import get_remote_address
 from config import *
 from automation_logic import *
 from database import DatabaseUtils, db_manager
+from instagram_automation import create_instagram_account, save_to_google_sheets
 
 # Configure logging
 try:
@@ -56,423 +56,403 @@ class InstagramBot:
         self.automation_thread = None
         self.is_running = False
 
+    # ==================== COMMANDS ====================
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command"""
-        chat_id = update.effective_chat.id
         welcome_message = """
-🤖 **Instagram Creator Bot**
+🤖 **Instagram Creator Bot v2**
 
-**Available Commands:**
-/start - Initialize the bot
-/start_auto <index> - Start automation from specific index
-/stop - Stop current automation process
-/status - Check current bot status
-/help - Show this help message
-/add_gmail <email>,<app_password> - Add Gmail account
-/add_accounts_from_file - Load Gmail accounts from attached file
-/accounts - Export all created accounts as file
+⚡ **New: Uses instagrapi API + temp emails (mail.tm)**
 
-**Ready to begin account creation automation!**
+**Commands:**
+/create [count] - Create accounts using temp emails (easiest!)
+/create_gmail [count] - Create using Gmail accounts
+/start_auto <index> - Start from specific Gmail index
+/stop - Stop current automation
+/status - Check current status
+/accounts - Export all created accounts as .txt
+/add_gmail <email>,<password> - Add Gmail account
+/help - Show this help
+
+**Examples:**
+/create 3 — Create 3 accounts with temp emails
+/create_gmail — Create 1 account with next Gmail
         """
         await update.message.reply_text(welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /help command"""
         help_message = """
-📚 **Bot Commands Guide**
+📚 **Bot Commands**
 
-**Basic Commands:**
-• `/start` - Initialize the bot
-• `/help` - Show this help message
+🚀 **Account Creation:**
+• `/create [N]` — Create N accounts (temp emails, no Gmail needed!)
+• `/create_gmail [N]` — Create N accounts using your Gmail accounts
 
-**Automation Commands:**
-• `/start_auto <index>` - Start automation from specific account index
-• `/stop` - Stop current automation process
-• `/status` - Check current bot status
+⚙️ **Automation:**
+• `/start_auto <index>` — Start batch from Gmail index
+• `/stop` — Stop running automation
+• `/status` — Current stats & progress
 
-**Account Management:**
-• `/add_gmail <email>,<app_password>` - Add a Gmail account
-• `/add_accounts_from_file` - Reply with a .txt file (email,password per line)
-• `/accounts` - Export all created accounts
+📁 **Data:**
+• `/accounts` — Download all accounts as .txt
+• `/add_gmail <email>,<pass>` — Add Gmail account
 
-**Examples:**
-• `/start_auto 0` - Start from first account
-• `/start_auto 5` - Start from 6th account
-• `/status` - Check current progress
-
-**Note:** The bot will process accounts sequentially and save all data to Google Sheets.
+💡 **Tips:**
+• `/create 5` = create 5 accounts automatically
+• Temp emails are auto-generated, no setup needed
+• Each account gets 2FA enabled automatically
         """
         await update.message.reply_text(help_message)
 
-    async def add_gmail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /add_gmail command"""
+    async def create_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Create accounts using temp emails (no Gmail needed!)"""
         chat_id = update.effective_chat.id
+        try:
+            state = load_bot_state()
+            if state['is_running']:
+                await update.message.reply_text("⚠️ Bot is busy! Use /stop first.")
+                return
 
+            # Get count (default 1)
+            count = 1
+            if context.args and context.args[0].isdigit():
+                count = min(int(context.args[0]), 10)  # Max 10 at a time
+
+            await update.message.reply_text(
+                f"🚀 **Creating {count} account(s) with temp emails...**\n"
+                f"⏳ This may take a few minutes per account.\n"
+                f"📧 Using mail.tm disposable emails"
+            )
+
+            # Start in background thread
+            self.is_running = True
+            self.automation_thread = threading.Thread(
+                target=self.run_temp_email_creation,
+                args=(count, chat_id)
+            )
+            self.automation_thread.daemon = True
+            self.automation_thread.start()
+
+        except Exception as e:
+            logger.error(f"Create error: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def create_gmail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Create accounts using Gmail accounts"""
+        chat_id = update.effective_chat.id
+        try:
+            state = load_bot_state()
+            if state['is_running']:
+                await update.message.reply_text("⚠️ Bot is busy! Use /stop first.")
+                return
+
+            count = 1
+            if context.args and context.args[0].isdigit():
+                count = min(int(context.args[0]), 10)
+
+            accounts = load_gmail_accounts()
+            if not accounts:
+                await update.message.reply_text(
+                    "📭 No Gmail accounts found!\n"
+                    "Add with: `/add_gmail email,password`\n"
+                    "Or use `/create` for temp email mode"
+                )
+                return
+
+            await update.message.reply_text(
+                f"🚀 **Creating {count} account(s) with Gmail...**\n"
+                f"📧 {len(accounts)} Gmail accounts available"
+            )
+
+            self.is_running = True
+            self.automation_thread = threading.Thread(
+                target=self.run_gmail_creation,
+                args=(count, chat_id)
+            )
+            self.automation_thread.daemon = True
+            self.automation_thread.start()
+
+        except Exception as e:
+            logger.error(f"Create Gmail error: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def add_gmail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
         if not context.args or len(context.args) < 1:
             await update.message.reply_text(
-                "❌ Usage: `/add_gmail email,app_password`\n\n"
-                "Example: `/add_gmail account@gmail.com,abcd efgh ijkl mnop`"
+                "❌ Usage: `/add_gmail email,password`\n"
+                "Example: `/add_gmail user@gmail.com,xxxx xxxx xxxx xxxx`"
             )
             return
 
         full_text = ' '.join(context.args)
         if ',' not in full_text:
-            await update.message.reply_text("❌ Please use format: `email,app_password`")
+            await update.message.reply_text("❌ Format: `email,password`")
             return
 
         email, app_password = full_text.split(',', 1)
-        email = email.strip()
-        app_password = app_password.strip()
+        email, app_password = email.strip(), app_password.strip()
 
         success = DatabaseUtils.add_gmail_account(email, app_password)
         if success:
-            await update.message.reply_text(f"✅ Gmail account added: `{email}`")
+            await update.message.reply_text(f"✅ Gmail added: `{email}`")
         else:
-            await update.message.reply_text(f"❌ Failed to add account. It might already exist.")
+            await update.message.reply_text(f"❌ Failed (maybe already exists)")
 
     async def start_auto_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start_auto command"""
+        """Start batch automation from Gmail list"""
         try:
             state = load_bot_state()
             if state['is_running']:
-                await update.message.reply_text(
-                    "⚠️ Automation is already running! Use /stop to stop it first."
-                )
+                await update.message.reply_text("⚠️ Already running! Use /stop first.")
                 return
 
-            # Get starting index
+            start_index = 0
             if context.args and context.args[0].isdigit():
                 start_index = int(context.args[0])
-            else:
-                start_index = 0
 
-            # Load accounts and validate
             accounts = load_gmail_accounts()
             if not accounts:
                 await update.message.reply_text(
-                    "❌ No Gmail accounts found! Please add accounts first using /add_gmail or /add_accounts_from_file"
+                    "📭 No Gmail accounts! Use /add_gmail or /create for temp mode"
                 )
                 return
 
             if start_index >= len(accounts):
                 await update.message.reply_text(
-                    f"❌ Starting index {start_index} is out of range. Total accounts: {len(accounts)}"
+                    f"❌ Index {start_index} out of range. Total: {len(accounts)}"
                 )
                 return
 
-            # Start automation
             self.is_running = True
             self.automation_thread = threading.Thread(
-                target=self.run_automation,
-                args=(start_index, update.message.chat_id)
+                target=self.run_gmail_creation,
+                args=(len(accounts) - start_index, update.message.chat_id, start_index)
             )
             self.automation_thread.daemon = True
             self.automation_thread.start()
 
-            confirmation_message = f"""
-🚀 **Automation Started!**
-
-📊 **Configuration Loaded:**
-• Starting from index: {start_index}
-• Total accounts in queue: {len(accounts)}
-• Headless mode: {HEADLESS_MODE}
-
-⏳ **Beginning account creation process...**
-            """
-            await update.message.reply_text(confirmation_message)
+            await update.message.reply_text(
+                f"🚀 **Started!**\n"
+                f"📊 From index {start_index}, {len(accounts)} accounts in queue"
+            )
 
         except Exception as e:
-            logger.error(f"Error starting automation: {e}")
-            await update.message.reply_text(f"❌ Error starting automation: {str(e)}")
+            logger.error(f"Start auto error: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
 
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stop command"""
         try:
             state = load_bot_state()
             if not state['is_running']:
-                await update.message.reply_text(
-                    "ℹ️ No automation is currently running."
-                )
+                await update.message.reply_text("ℹ️ Nothing is running.")
                 return
 
             state['is_running'] = False
             save_bot_state(state)
             self.is_running = False
 
-            stop_message = f"""
-🛑 **Automation Stopped!**
-
-📊 **Session Summary:**
-• Duration: {self.get_session_duration()}
-• Accounts processed: {state['total_processed']}
-• Successfully created: {state['successful']}
-• Failed: {state['failed']}
-• Last processed index: {state['current_index']}
-
-💾 **State saved. Use `/start_auto {state['current_index']}` to resume.**
-            """
-            await update.message.reply_text(stop_message)
-
+            await update.message.reply_text(
+                f"🛑 **Stopped!**\n"
+                f"✅ Created: {state['successful']}\n"
+                f"❌ Failed: {state['failed']}\n"
+                f"⏱ Duration: {self.get_session_duration()}"
+            )
         except Exception as e:
-            logger.error(f"Error stopping automation: {e}")
-            await update.message.reply_text(f"❌ Error stopping automation: {str(e)}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /status command"""
         try:
             state = load_bot_state()
-            accounts = load_gmail_accounts()
+            stats = get_statistics()
 
-            if state['is_running']:
-                status_icon = "🔄"
-                status_text = "RUNNING"
-            else:
-                status_icon = "⏸️"
-                status_text = "STOPPED"
+            icon = "🔄" if state['is_running'] else "⏸️"
+            status = "RUNNING" if state['is_running'] else "IDLE"
 
-            success_rate = 0
+            rate = 0
             if state['total_processed'] > 0:
-                success_rate = (state['successful'] / state['total_processed']) * 100
+                rate = (state['successful'] / state['total_processed']) * 100
 
-            status_message = f"""
-📊 **Current Automation Status**
-
-{status_icon} **Process:** {status_text}
-📅 **Started:** {state.get('started_at', 'N/A')}
-✅ **Completed:** {state['successful']} accounts
-❌ **Failed:** {state['failed']} accounts
-⏳ **Current:** Processing account #{state['current_index'] + 1}
-⏰ **ETA:** {self.calculate_eta(state, accounts)}
-
-📈 **Success Rate:** {success_rate:.1f}%
-📋 **Total Accounts:** {len(accounts)}
-            """
-            await update.message.reply_text(status_message)
-
+            await update.message.reply_text(
+                f"{icon} **Status:** {status}\n"
+                f"✅ Created: {stats['successful']}\n"
+                f"❌ Failed: {stats['failed']}\n"
+                f"📈 Success Rate: {rate:.1f}%\n"
+                f"📋 Total in DB: {stats['total']}\n"
+                f"⏱ Duration: {self.get_session_duration()}"
+            )
         except Exception as e:
-            logger.error(f"Error getting status: {e}")
-            await update.message.reply_text(f"❌ Error getting status: {str(e)}")
-
-    def run_automation(self, start_index, chat_id):
-        """Main automation loop"""
-        try:
-            accounts = load_gmail_accounts()
-            static_password = load_static_password()
-
-            state = load_bot_state()
-            state['is_running'] = True
-            state['current_index'] = start_index
-            state['started_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
-            save_bot_state(state)
-
-            for i in range(start_index, len(accounts)):
-                if not state['is_running']:
-                    break
-
-                account = accounts[i]
-                logger.info(f"Processing account {i+1}/{len(accounts)}: {account['email']}")
-
-                asyncio.run(self.send_progress_update(chat_id, i+1, len(accounts), account['email']))
-
-                account_data = create_instagram_account(
-                    account['email'],
-                    account['app_password'],
-                    static_password
-                )
-
-                if account_data:
-                    save_to_google_sheets(account_data)
-                    state['successful'] += 1
-                    state['total_processed'] += 1
-                    asyncio.run(self.send_success_message(chat_id, i+1, account_data))
-                else:
-                    state['failed'] += 1
-                    state['total_processed'] += 1
-                    asyncio.run(self.send_failure_message(chat_id, i+1, account['email']))
-
-                state['current_index'] = i + 1
-                save_bot_state(state)
-
-                if i < len(accounts) - 1:
-                    time.sleep(DELAY_BETWEEN_ACCOUNTS)
-
-            if state['is_running']:
-                asyncio.run(self.send_completion_message(chat_id, state))
-
-            state['is_running'] = False
-            save_bot_state(state)
-
-        except Exception as e:
-            logger.error(f"Error in automation loop: {e}")
-            asyncio.run(self.send_error_message(chat_id, str(e)))
-
-    async def send_progress_update(self, chat_id, current, total, email):
-        """Send progress update message"""
-        try:
-            message = f"""
-🔄 **Processing Account #{current} ({current}/{total})**
-📧 **Gmail:** {email}
-⏰ **Started:** {time.strftime('%H:%M:%S')}
-            """
-            await self.bot.send_message(chat_id=chat_id, text=message)
-        except TelegramError as e:
-            logger.error(f"Error sending progress update: {e}")
-
-    async def send_success_message(self, chat_id, account_num, account_data):
-        """Send success message"""
-        try:
-            message = f"""
-✅ **Account #{account_num} Created Successfully!**
-
-📋 **Account Details:**
-• Username: {account_data['username']}
-• Temp Email: {account_data['temp_email']}
-• Password: **********
-• 2FA Key: {account_data.get('secret_key', 'N/A')}
-• Status: Active
-
-💾 **Saved to Database**
-⏱️ **Processing time:** {account_data.get('processing_time', 'N/A'):.1f}s
-            """
-            await self.bot.send_message(chat_id=chat_id, text=message)
-        except TelegramError as e:
-            logger.error(f"Error sending success message: {e}")
-
-    async def send_failure_message(self, chat_id, account_num, email):
-        """Send failure message"""
-        try:
-            state = load_bot_state()
-            message = f"""
-❌ **Account #{account_num} Failed!**
-
-⚠️ **Error Details:**
-• Gmail: {email}
-• Error: Account creation failed
-• Action: Skipping to next account
-
-📊 **Current Stats:**
-• Successful: {state['successful']}
-• Failed: {state['failed']}
-• Remaining: {len(load_gmail_accounts()) - account_num}
-            """
-            await self.bot.send_message(chat_id=chat_id, text=message)
-        except TelegramError as e:
-            logger.error(f"Error sending failure message: {e}")
-
-    async def send_completion_message(self, chat_id, state):
-        """Send completion message"""
-        try:
-            success_rate = 0
-            if state['total_processed'] > 0:
-                success_rate = (state['successful'] / state['total_processed']) * 100
-
-            message = f"""
-🎉 **Automation Complete!**
-
-📊 **Final Report:**
-• Total accounts processed: {state['total_processed']}
-• Successfully created: {state['successful']} ({success_rate:.1f}%)
-• Failed: {state['failed']}
-• Total duration: {self.get_session_duration()}
-
-📁 **Data saved to Database & Google Sheets**
-🔄 **Use `/start_auto` to begin new session.**
-            """
-            await self.bot.send_message(chat_id=chat_id, text=message)
-        except TelegramError as e:
-            logger.error(f"Error sending completion message: {e}")
-
-    async def send_error_message(self, chat_id, error):
-        """Send error message"""
-        try:
-            message = f"""
-❌ **Automation Error!**
-
-⚠️ **Error Details:**
-{error}
-
-🛑 **Automation stopped. Check logs for more details.**
-            """
-            await self.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
-        except TelegramError as e:
-            logger.error(f"Error sending error message: {e}")
-
-    def get_session_duration(self):
-        """Calculate session duration"""
-        state = load_bot_state()
-        if 'started_at' in state and state['started_at']:
-            start_time = time.strptime(state['started_at'], '%Y-%m-%d %H:%M:%S')
-            current_time = time.localtime()
-            duration = time.mktime(current_time) - time.mktime(start_time)
-            return f"{int(duration // 3600)}h {int((duration % 3600) // 60)}m"
-        return "N/A"
-
-    def calculate_eta(self, state, accounts):
-        """Calculate estimated time to completion"""
-        if not state['is_running'] or state['current_index'] >= len(accounts):
-            return "N/A"
-
-        remaining = len(accounts) - state['current_index']
-        avg_time_per_account = 5
-        eta_minutes = remaining * avg_time_per_account
-
-        if eta_minutes < 60:
-            return f"{eta_minutes}m"
-        else:
-            hours = eta_minutes // 60
-            minutes = eta_minutes % 60
-            return f"{hours}h {minutes}m"
+            await update.message.reply_text(f"❌ Error: {str(e)}")
 
     async def accounts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /accounts command - send accounts file"""
         chat_id = update.effective_chat.id
         try:
             accounts = DatabaseUtils.get_instagram_accounts(status='successful')
             if not accounts:
-                await update.message.reply_text("📭 No successful accounts found yet.")
+                await update.message.reply_text("📭 No accounts created yet. Use /create to start!")
                 return
 
-            # Build text file content
-            lines = []
-            lines.append(f"=== Instagram Accounts ({len(accounts)} accounts) ===")
-            lines.append(f"=== Exported: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} ===")
-            lines.append("")
-            lines.append(f"{'#':<4} {'Username':<20} {'Email':<35} {'Password':<25} {'2FA Key':<30} {'Date'}")
-            lines.append("-" * 140)
+            lines = [
+                f"=== Instagram Accounts ({len(accounts)}) ===",
+                f"Exported: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                "",
+                f"{'#':<4} {'Username':<20} {'Password':<20} {'2FA Key':<30}",
+                "-" * 80
+            ]
             for i, acc in enumerate(accounts, 1):
                 username = acc.username or 'N/A'
-                email = acc.email or 'N/A'
                 password = acc.password or 'N/A'
                 secret = acc.secret_key or 'N/A'
-                date = acc.created_at.strftime('%Y-%m-%d %H:%M') if acc.created_at else 'N/A'
-                lines.append(f"{i:<4} {username:<20} {email:<35} {password:<25} {secret:<30} {date}")
+                lines.append(f"{i:<4} {username:<20} {password:<20} {secret:<30}")
 
-            content = '\n'.join(lines)
-
-            # Save to file
             filename = f'accounts_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.txt'
             with open(filename, 'w', encoding='utf-8') as f:
-                f.write(content)
+                f.write('\n'.join(lines))
 
-            # Send file to user
             with open(filename, 'rb') as f:
                 await update.message.reply_document(
                     document=f,
                     filename=filename,
-                    caption=f"📁 **{len(accounts)} Instagram accounts**\n✅ Successful only\n📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+                    caption=f"📁 **{len(accounts)} accounts** exported"
                 )
-
-            # Clean up
             os.remove(filename)
 
         except Exception as e:
-            logger.error(f"Error exporting accounts: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
 
+    # ==================== AUTOMATION THREADS ====================
+
+    def run_temp_email_creation(self, count, chat_id):
+        """Create N accounts using temp emails (mail.tm)"""
+        state = load_bot_state()
+        state['is_running'] = True
+        state['started_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        save_bot_state(state)
+
+        for i in range(count):
+            if not state['is_running']:
+                break
+
+            asyncio.run(self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔄 **Account {i+1}/{count}** — Creating with temp email...\n⏰ {time.strftime('%H:%M:%S')}"
+            ))
+
+            account_data = create_instagram_account(use_temp_email=True)
+
+            if account_data:
+                state['successful'] += 1
+                state['total_processed'] += 1
+                asyncio.run(self.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"✅ **Account #{i+1} Created!**\n"
+                         f"👤 Username: `{account_data['username']}`\n"
+                         f"📧 Email: `{account_data['temp_email']}`\n"
+                         f"🔑 2FA: `{account_data.get('secret_key', 'N/A')}`\n"
+                         f"⏱ {account_data['processing_time']:.1f}s"
+                ))
+            else:
+                state['failed'] += 1
+                state['total_processed'] += 1
+                asyncio.run(self.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ **Account #{i+1} Failed** — Trying next..."
+                ))
+
+            state['current_index'] = i + 1
+            save_bot_state(state)
+
+            if i < count - 1:
+                time.sleep(DELAY_BETWEEN_ACCOUNTS)
+
+        if state['is_running']:
+            rate = (state['successful'] / state['total_processed'] * 100) if state['total_processed'] > 0 else 0
+            asyncio.run(self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 **Done!**\n✅ {state['successful']} created | ❌ {state['failed']} failed | 📈 {rate:.0f}%"
+            ))
+
+        state['is_running'] = False
+        save_bot_state(state)
+        self.is_running = False
+
+    def run_gmail_creation(self, count, chat_id, start_index=0):
+        """Create accounts using Gmail"""
+        accounts = load_gmail_accounts()
+        state = load_bot_state()
+        state['is_running'] = True
+        state['started_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        save_bot_state(state)
+
+        end = min(start_index + count, len(accounts))
+
+        for i in range(start_index, end):
+            if not state['is_running']:
+                break
+
+            acc = accounts[i]
+            asyncio.run(self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔄 **Account {i+1}/{end}** — Using Gmail: `{acc['email']}`"
+            ))
+
+            account_data = create_instagram_account(
+                use_temp_email=False,
+                gmail_account=acc['email'],
+                gmail_app_password=acc['app_password']
+            )
+
+            if account_data:
+                save_to_google_sheets(account_data)
+                DatabaseUtils.mark_gmail_account_used(acc['email'])
+                state['successful'] += 1
+                state['total_processed'] += 1
+                asyncio.run(self.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"✅ **Created!**\n👤 `{account_data['username']}`\n🔑 2FA: `{account_data.get('secret_key', 'N/A')}`"
+                ))
+            else:
+                state['failed'] += 1
+                state['total_processed'] += 1
+                asyncio.run(self.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Account #{i+1} failed"
+                ))
+
+            state['current_index'] = i + 1
+            save_bot_state(state)
+
+            if i < end - 1:
+                time.sleep(DELAY_BETWEEN_ACCOUNTS)
+
+        if state['is_running']:
+            asyncio.run(self.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 **Gmail batch done!**\n✅ {state['successful']} | ❌ {state['failed']}"
+            ))
+
+        state['is_running'] = False
+        save_bot_state(state)
+        self.is_running = False
+
+    # ==================== HELPERS ====================
+
+    def get_session_duration(self):
+        state = load_bot_state()
+        if state.get('started_at'):
+            try:
+                start = time.strptime(state['started_at'], '%Y-%m-%d %H:%M:%S')
+                dur = time.mktime(time.localtime()) - time.mktime(start)
+                return f"{int(dur // 3600)}h {int((dur % 3600) // 60)}m"
+            except:
+                pass
+        return "N/A"
+
     def setup_handlers(self):
-        """Setup command handlers"""
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("create", self.create_command))
+        self.application.add_handler(CommandHandler("create_gmail", self.create_gmail_command))
         self.application.add_handler(CommandHandler("start_auto", self.start_auto_command))
         self.application.add_handler(CommandHandler("stop", self.stop_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
@@ -480,10 +460,9 @@ class InstagramBot:
         self.application.add_handler(CommandHandler("accounts", self.accounts_command))
 
     def run(self):
-        """Run the bot"""
         try:
             self.setup_handlers()
-            logger.info("Starting Instagram automation bot...")
+            logger.info("Starting Instagram Creator Bot v2 (instagrapi + temp emails)")
             self.application.run_polling()
         except Exception as e:
             logger.error(f"Error running bot: {e}")
@@ -494,187 +473,105 @@ class InstagramBot:
 @api_app.route('/api/bot/status')
 @limiter.limit("10 per minute")
 def api_bot_status():
-    """Get current bot status and statistics"""
     try:
         state = load_bot_state()
-        stats = DatabaseUtils.get_statistics()
-
+        stats = get_statistics()
         return jsonify({
             'status': 'online' if state['is_running'] else 'offline',
             'is_running': state['is_running'],
-            'stats': {
-                'total': stats['total'],
-                'successful': stats['successful'],
-                'failed': stats['failed'],
-                'pending': stats['pending'],
-                'successRate': stats['success_rate']
-            },
+            'stats': stats,
             'bot_state': state
         })
     except Exception as e:
-        logger.error(f"Error getting bot status: {e}")
         return jsonify({'error': str(e)}), 500
 
 
-@api_app.route('/api/bot/start', methods=['POST'])
+@api_app.route('/api/bot/create', methods=['POST'])
 @limiter.limit("5 per hour")
-def api_start_bot():
-    """Start automation process"""
+def api_create_account():
     try:
-        data = request.get_json()
-        start_index = data.get('startIndex', 0) if data else 0
+        data = request.get_json() or {}
+        count = min(data.get('count', 1), 10)
+        use_temp = data.get('useTempEmail', True)
 
         state = load_bot_state()
         if state['is_running']:
-            return jsonify({'error': 'Automation is already running'}), 400
-
-        accounts = load_gmail_accounts()
-        if start_index >= len(accounts):
-            return jsonify({'error': f'Start index {start_index} is out of range. Total accounts: {len(accounts)}'}), 400
+            return jsonify({'error': 'Bot is busy'}), 400
 
         bot_instance = InstagramBot()
-        bot_instance.automation_thread = threading.Thread(
-            target=bot_instance.run_automation,
-            args=(start_index, None)
-        )
+        if use_temp:
+            bot_instance.automation_thread = threading.Thread(
+                target=bot_instance.run_temp_email_creation,
+                args=(count, None)
+            )
+        else:
+            bot_instance.automation_thread = threading.Thread(
+                target=bot_instance.run_gmail_creation,
+                args=(count, None, 0)
+            )
         bot_instance.automation_thread.daemon = True
         bot_instance.automation_thread.start()
 
-        return jsonify({
-            'success': True,
-            'message': 'Automation started',
-            'startIndex': start_index
-        })
+        return jsonify({'success': True, 'count': count, 'mode': 'temp' if use_temp else 'gmail'})
     except Exception as e:
-        logger.error(f"Error starting automation: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@api_app.route('/api/bot/stop', methods=['POST'])
-@limiter.limit("5 per hour")
-def api_stop_bot():
-    """Stop automation process"""
-    try:
-        state = load_bot_state()
-        if not state['is_running']:
-            return jsonify({'error': 'No automation is currently running'}), 400
-
-        DatabaseUtils.update_bot_state(is_running=False)
-        return jsonify({'success': True, 'message': 'Automation stopped'})
-    except Exception as e:
-        logger.error(f"Error stopping automation: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @api_app.route('/api/accounts')
 @limiter.limit("20 per minute")
 def api_get_accounts():
-    """Get Instagram accounts"""
     try:
         status = request.args.get('status')
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
-
         accounts = DatabaseUtils.get_instagram_accounts(status)
-
         total = len(accounts)
-        accounts = accounts[offset:offset + limit]
 
-        accounts_data = []
-        for account in accounts:
-            accounts_data.append({
-                'id': account.id,
-                'username': account.username,
-                'email': account.email,
-                'temp_email': account.temp_email,
-                'status': account.status,
-                'created_at': account.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'processing_time': account.processing_time,
-                'error_message': account.error_message
-            })
+        accounts_data = [{
+            'id': a.id, 'username': a.username, 'email': a.email,
+            'temp_email': a.temp_email, 'status': a.status,
+            'created_at': a.created_at.strftime('%Y-%m-%d %H:%M:%S') if a.created_at else None,
+            'secret_key': a.secret_key
+        } for a in accounts]
 
-        return jsonify({
-            'accounts': accounts_data,
-            'total': total,
-            'limit': limit,
-            'offset': offset
-        })
+        return jsonify({'accounts': accounts_data, 'total': total})
     except Exception as e:
-        logger.error(f"Error getting accounts: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@api_app.route('/api/logs')
-@limiter.limit("20 per minute")
-def api_get_logs():
-    """Get recent automation logs"""
-    try:
-        limit = int(request.args.get('limit', 50))
-        logs = DatabaseUtils.get_recent_logs(limit)
-
-        logs_data = []
-        for log in logs:
-            logs_data.append({
-                'id': log.id,
-                'level': log.level,
-                'message': log.message,
-                'account_id': log.account_id,
-                'created_at': log.created_at.strftime('%Y-%m-%d %H:%M:%S')
-            })
-
-        return jsonify({'logs': logs_data})
-    except Exception as e:
-        logger.error(f"Error getting logs: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @api_app.route('/health')
 def health_check():
-    """Health check endpoint for Heroku"""
     try:
-        db_healthy = db_manager.test_connection()
-
+        db_ok = db_manager.test_connection()
         return jsonify({
-            'status': 'healthy' if db_healthy else 'unhealthy',
-            'timestamp': time.time(),
-            'database': 'connected' if db_healthy else 'disconnected',
+            'status': 'healthy' if db_ok else 'unhealthy',
+            'database': 'connected' if db_ok else 'disconnected',
             'bot_running': load_bot_state()['is_running']
         })
     except Exception as e:
-        return jsonify({
-            'status': 'unhealthy',
-            'error': str(e)
-        }), 500
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 
 def run_api_server():
-    """Run Flask API server"""
     try:
-        logger.info(f"Starting API server on port {PORT}...")
+        logger.info(f"API server on port {PORT}")
         api_app.run(host='0.0.0.0', port=PORT, debug=False)
     except Exception as e:
-        logger.error(f"Error running API server: {e}")
+        logger.error(f"API server error: {e}")
 
 
 if __name__ == "__main__":
-    # Validate BOT_TOKEN
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN environment variable is not set!")
-        print("ERROR: Please set the BOT_TOKEN environment variable.")
-        print("Example: railway variables set BOT_TOKEN=your_bot_token")
+        logger.error("BOT_TOKEN not set!")
+        print("ERROR: Set BOT_TOKEN env variable")
         import sys
         sys.exit(1)
 
-    # Initialize database
     try:
         if db_manager.test_connection():
-            logger.info("Database connection successful")
-        else:
-            logger.warning("Database connection failed - using SQLite fallback")
+            logger.info("Database connected")
     except Exception as e:
-        logger.error(f"Database initialization error: {e}")
+        logger.error(f"DB init error: {e}")
 
-    # Start API server in background thread
+    # Start API in background
     api_thread = threading.Thread(target=run_api_server)
     api_thread.daemon = True
     api_thread.start()

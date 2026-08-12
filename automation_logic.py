@@ -6,6 +6,7 @@ from database import DatabaseUtils
 
 logger = logging.getLogger(__name__)
 
+
 def load_bot_state():
     """Load bot state from database"""
     try:
@@ -21,25 +22,18 @@ def load_bot_state():
                 'last_updated': state_obj.last_updated.strftime('%Y-%m-%d %H:%M:%S') if state_obj.last_updated else None
             }
         return {
-            'is_running': False,
-            'current_index': 0,
-            'total_processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'started_at': None,
-            'last_updated': None
+            'is_running': False, 'current_index': 0,
+            'total_processed': 0, 'successful': 0, 'failed': 0,
+            'started_at': None, 'last_updated': None
         }
     except Exception as e:
         logger.error(f"Error loading bot state: {e}")
         return {
-            'is_running': False,
-            'current_index': 0,
-            'total_processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'started_at': None,
-            'last_updated': None
+            'is_running': False, 'current_index': 0,
+            'total_processed': 0, 'successful': 0, 'failed': 0,
+            'started_at': None, 'last_updated': None
         }
+
 
 def save_bot_state(state):
     """Save bot state to database"""
@@ -50,7 +44,6 @@ def save_bot_state(state):
                 started_at = datetime.strptime(state['started_at'], '%Y-%m-%d %H:%M:%S')
             except:
                 pass
-        
         DatabaseUtils.update_bot_state(
             is_running=state.get('is_running', False),
             current_index=state.get('current_index', 0),
@@ -64,8 +57,9 @@ def save_bot_state(state):
         logger.error(f"Error saving bot state: {e}")
         return False
 
+
 def get_gmail_accounts():
-    """Get Gmail accounts from database"""
+    """Get unused Gmail accounts"""
     try:
         accounts = DatabaseUtils.get_unused_gmail_accounts()
         return [{'email': acc.email, 'app_password': acc.app_password} for acc in accounts]
@@ -73,8 +67,9 @@ def get_gmail_accounts():
         logger.error(f"Error getting Gmail accounts: {e}")
         return []
 
+
 def get_all_gmail_accounts():
-    """Get all Gmail accounts from database"""
+    """Get all Gmail accounts"""
     try:
         accounts = DatabaseUtils.get_all_gmail_accounts()
         return [{'email': acc.email, 'app_password': acc.app_password, 'is_used': acc.is_used} for acc in accounts]
@@ -82,14 +77,15 @@ def get_all_gmail_accounts():
         logger.error(f"Error getting all Gmail accounts: {e}")
         return []
 
+
 def get_instagram_accounts(status=None):
     """Get Instagram accounts from database"""
     try:
-        accounts = DatabaseUtils.get_instagram_accounts(status)
-        return accounts
+        return DatabaseUtils.get_instagram_accounts(status)
     except Exception as e:
         logger.error(f"Error getting Instagram accounts: {e}")
         return []
+
 
 def get_statistics():
     """Get automation statistics"""
@@ -97,14 +93,8 @@ def get_statistics():
         return DatabaseUtils.get_statistics()
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
-        return {
-            'total': 0,
-            'successful': 0,
-            'failed': 0,
-            'pending': 0,
-            'success_rate': 0,
-            'avg_processing_time': 0
-        }
+        return {'total': 0, 'successful': 0, 'failed': 0, 'pending': 0, 'success_rate': 0, 'avg_processing_time': 0}
+
 
 def add_gmail_account(email, app_password):
     """Add Gmail account to database"""
@@ -114,6 +104,7 @@ def add_gmail_account(email, app_password):
         logger.error(f"Error adding Gmail account: {e}")
         return False
 
+
 def mark_gmail_account_used(email):
     """Mark Gmail account as used"""
     try:
@@ -122,14 +113,15 @@ def mark_gmail_account_used(email):
         logger.error(f"Error marking Gmail account as used: {e}")
         return False
 
+
 def get_recent_logs(limit=50):
     """Get recent automation logs"""
     try:
-        logs = DatabaseUtils.get_recent_logs(limit)
-        return logs
+        return DatabaseUtils.get_recent_logs(limit)
     except Exception as e:
         logger.error(f"Error getting recent logs: {e}")
         return []
+
 
 def add_automation_log(level, message, account_id=None):
     """Add automation log entry"""
