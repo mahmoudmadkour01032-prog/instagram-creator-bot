@@ -12,11 +12,9 @@ from datetime import datetime
 from instagrapi import Client
 from instagrapi.exceptions import (
     ChallengeRequired,
-    CheckpointRequired,
+    ChallengeError,
     FeedbackRequired,
     PleaseWaitFewMinutesError,
-    SignupError,
-    ReloginAttemptExceededError,
 )
 from temp_email import TempEmailManager
 from config import *
@@ -87,7 +85,10 @@ def create_instagram_account(use_temp_email=True, gmail_account=None, gmail_app_
 
         # Step 2: Initialize instagrapi client
         client = Client()
-        client.delay_range = [1, 3]  # Human-like delays
+        client.delay_range = [1, 3]
+        client.set_country('US')
+        client.set_timezone_offset(-18000)
+        client.device_id = client.generate_android_device_id()
 
         # Generate account details
         username = generate_username()
@@ -96,40 +97,36 @@ def create_instagram_account(use_temp_email=True, gmail_account=None, gmail_app_
 
         DatabaseUtils.add_automation_log("info", f"Attempting signup: {username}")
 
-        # Step 3: Sign up
+        # Step 3: Sign up using instagrapi signup() method
         try:
-            client.sign_up(
-                email=signup_email,
-                password=password,
+            client.signup(
                 username=username,
-                first_name=full_name
+                password=password,
+                email=signup_email,
+                phone_number="",  # empty = email-based signup
+                full_name=full_name
             )
             DatabaseUtils.add_automation_log("info", "Signup form submitted successfully")
 
         except (ChallengeRequired, CheckpointRequired) as challenge:
             DatabaseUtils.add_automation_log("info", f"Challenge required: {type(challenge).__name__}")
 
-            # Get challenge info
-            challenge_data = client.challenge_resolve(challenge)
-
-            # Check if it's email verification
-            if hasattr(challenge, 'challenge') and challenge.challenge:
-                challenge_type = getattr(challenge.challenge, 'step_name', None) or \
-                                  getattr(challenge, 'step_name', None)
-
-                if challenge_type == 'select_verify_method':
-                    # Select email verification
-                    client.challenge_select_verify_method('email')
-                    DatabaseUtils.add_automation_log("info", "Selected email verification method")
-
-                elif challenge_type == 'security_code':
-                    # Already on code entry step
-                    pass
-
-            # Now we need to handle the verification code
-            # Try to send the code first
+            # Handle the challenge - select email verification
             try:
-                client.challenge_send_code()
+                client.challenge_resolve(challenge)
+            except Exception as ce:
+                DatabaseUtils.add_automation_log("warning", f"challenge_resolve note: {ce}")
+
+            # Select email as verification method
+            try:
+                client.challenge_select_verify_method('email')
+                DatabaseUtils.add_automation_log("info", "Selected email verification")
+            except Exception as e:
+                DatabaseUtils.add_automation_log("debug", f"Select method note: {e}")
+
+            # Request code to be sent
+            try:
+                client.challenge_send_code('email')
                 DatabaseUtils.add_automation_log("info", "Verification code sent to email")
             except Exception as e:
                 DatabaseUtils.add_automation_log("warning", f"Send code note: {e}")
@@ -155,10 +152,10 @@ def create_instagram_account(use_temp_email=True, gmail_account=None, gmail_app_
                 client.challenge_verify_code(otp_code)
                 DatabaseUtils.add_automation_log("info", "Verification code accepted!")
             except Exception as verify_err:
-                # Some versions use different verify method
+                DatabaseUtils.add_automation_log("warning", f"Verify attempt: {verify_err}")
                 try:
-                    client.challenge_resolve_one(otp_code)
-                    DatabaseUtils.add_automation_log("info", "Verification resolved (alt method)")
+                    client.challenge_send_code_security_code(otp_code)
+                    DatabaseUtils.add_automation_log("info", "Code submitted (alt method)")
                 except Exception as e2:
                     raise Exception(f"Verification failed: {verify_err} / {e2}")
 
